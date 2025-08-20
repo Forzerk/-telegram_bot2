@@ -8,12 +8,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime, timedelta
 
 TOKEN = "8306438881:AAEFg_MpnXk_iY2zHA5cGJomFv_kVAygbLk"
-ADMIN_CHAT_ID = -4936649070  # Группа для отчетов и напоминаний
+ADMIN_CHAT_ID = 5612586446  # Группа для отчетов и напоминаний
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Главное меню
+# Клавиатура
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📤 Отправить отчет")],
@@ -24,17 +24,7 @@ main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура для редактирования напоминания
-edit_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="Дата"), KeyboardButton(text="Время")],
-        [KeyboardButton(text="Содержание")],
-        [KeyboardButton(text="Назад")],
-    ],
-    resize_keyboard=True
-)
-
-# FSM
+# FSM для имени и напоминаний
 class Form(StatesGroup):
     waiting_for_name = State()
     waiting_for_report = State()
@@ -42,13 +32,16 @@ class Form(StatesGroup):
     waiting_for_reminder_time = State()
     waiting_for_reminder_text = State()
     waiting_for_edit_choice = State()
-    waiting_for_edit_value = State()
+    waiting_for_new_value = State()
 
-# Временное хранилище напоминания
+# Хранилище текущего напоминания пользователя (в памяти, не сохраняется)
 current_reminder = {}
 
-# /start
-@dp.message(Command(commands=["start"]))
+# Список пользователей, которым разрешено ставить напоминания
+allowed_users = ["Камрон", "Иван"]  # <-- сюда добавь избранных
+
+# Старт
+@dp.message(Command())
 async def cmd_start(message: types.Message, state: FSMContext):
     await message.answer("Привет!\nПеред отправкой отчётов, пожалуйста, введи своё имя:")
     await state.set_state(Form.waiting_for_name)
@@ -73,104 +66,69 @@ async def forward_report(message: types.Message, state: FSMContext):
     if message.content_type == "text":
         await bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"От {name}:\n\n{message.text}")
     elif message.content_type == "photo":
-        await bot.send_photo(chat_id=ADMIN_CHAT_ID, photo=message.photo[-1].file_id,
-                             caption=f"От {name}:\n\n{message.caption or ''}")
+        await bot.send_photo(chat_id=ADMIN_CHAT_ID, photo=message.photo[-1].file_id, caption=f"От {name}:\n\n{message.caption or ''}")
     elif message.content_type == "document":
-        await bot.send_document(chat_id=ADMIN_CHAT_ID, document=message.document.file_id,
-                                caption=f"От {name}:\n\n{message.caption or ''}")
+        await bot.send_document(chat_id=ADMIN_CHAT_ID, document=message.document.file_id, caption=f"От {name}:\n\n{message.caption or ''}")
     await message.answer("Отчет отправлен!", reply_markup=main_kb)
     await state.clear()
 
 # Установка напоминания
 @dp.message(F.text == "📌 Установить напоминание")
-async def set_reminder_date(message: types.Message, state: FSMContext):
-    await message.answer("Введи дату напоминания в формате YYYY-MM-DD:")
+async def set_reminder(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("name", "")
+    if name not in allowed_users:
+        await message.answer("Извините, вы не можете ставить напоминания.")
+        return
+    await message.answer("Введите дату напоминания в формате YYYY-MM-DD:")
     await state.set_state(Form.waiting_for_reminder_date)
 
 @dp.message(Form.waiting_for_reminder_date)
-async def set_reminder_time(message: types.Message, state: FSMContext):
+async def reminder_date(message: types.Message, state: FSMContext):
     try:
-        date = datetime.strptime(message.text, "%Y-%m-%d").date()
-        current_reminder['date'] = date
-        await message.answer("Теперь введи время напоминания в формате HH:MM:")
+        dt = datetime.strptime(message.text, "%Y-%m-%d")
+        current_reminder[message.from_user.id] = {"date": dt}
+        await message.answer("Теперь введите время в формате HH:MM:")
         await state.set_state(Form.waiting_for_reminder_time)
-    except ValueError:
-        await message.answer("Неверный формат даты. Попробуй ещё раз: YYYY-MM-DD")
+    except:
+        await message.answer("Неверный формат даты. Попробуйте снова.")
 
 @dp.message(Form.waiting_for_reminder_time)
-async def set_reminder_text(message: types.Message, state: FSMContext):
+async def reminder_time(message: types.Message, state: FSMContext):
     try:
-        time = datetime.strptime(message.text, "%H:%M").time()
-        current_reminder['time'] = time
-        await message.answer("Введи текст напоминания:")
+        t = datetime.strptime(message.text, "%H:%M").time()
+        current_reminder[message.from_user.id]["time"] = t
+        await message.answer("Введите текст напоминания:")
         await state.set_state(Form.waiting_for_reminder_text)
-    except ValueError:
-        await message.answer("Неверный формат времени. Попробуй ещё раз: HH:MM")
+    except:
+        await message.answer("Неверный формат времени. Попробуйте снова.")
 
 @dp.message(Form.waiting_for_reminder_text)
-async def save_reminder(message: types.Message, state: FSMContext):
-    current_reminder['text'] = message.text
-    data = await state.get_data()
-    name = data.get("name", "Пользователь")
-    dt = datetime.combine(current_reminder['date'], current_reminder['time'])
-    asyncio.create_task(reminder_task(dt, name, current_reminder['text']))
-    await message.answer(f"Напоминание установлено на {dt} с текстом:\n{message.text}", reply_markup=main_kb)
+async def reminder_text(message: types.Message, state: FSMContext):
+    current_reminder[message.from_user.id]["text"] = message.text
+    dt = current_reminder[message.from_user.id]["date"]
+    t = current_reminder[message.from_user.id]["time"]
+    text = current_reminder[message.from_user.id]["text"]
+    full_dt = datetime.combine(dt, t)
+    await message.answer(f"Напоминание сохранено: {full_dt} — {text}", reply_markup=main_kb)
     await state.clear()
 
-# Фоновая задача отправки напоминания
-async def reminder_task(dt, name, text):
-    now = datetime.now()
-    delay = (dt - now).total_seconds()
-    if delay > 0:
-        await asyncio.sleep(delay)
-    await bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"От {name} (напоминание): {text}")
+# Фоновая задача для отправки напоминаний
+async def reminder_loop():
+    while True:
+        now = datetime.now()
+        for user_id, rem in list(current_reminder.items()):
+            full_dt = datetime.combine(rem["date"], rem["time"])
+            if now >= full_dt:
+                data = await dp.current_state(chat=user_id).get_data()
+                name = data.get("name", "Пользователь")
+                await bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"Напоминание от {name}: {rem['text']}")
+                current_reminder.pop(user_id)
+        await asyncio.sleep(30)
 
-# Редактирование напоминания
-@dp.message(F.text == "✏ Редактировать напоминание")
-async def edit_reminder(message: types.Message, state: FSMContext):
-    if not current_reminder:
-        await message.answer("Сначала установи напоминание!", reply_markup=main_kb)
-        return
-    await message.answer("Выбери, что хочешь изменить:", reply_markup=edit_kb)
-    await state.set_state(Form.waiting_for_edit_choice)
-
-@dp.message(Form.waiting_for_edit_choice)
-async def edit_choice(message: types.Message, state: FSMContext):
-    if message.text not in ["Дата", "Время", "Содержание", "Назад"]:
-        await message.answer("Выбери один из вариантов на кнопках")
-        return
-    if message.text == "Назад":
-        await message.answer("Возврат в меню", reply_markup=main_kb)
-        await state.clear()
-        return
-    await state.update_data(edit_field=message.text)
-    await message.answer(f"Введи новое значение для {message.text}:")
-    await state.set_state(Form.waiting_for_edit_value)
-
-@dp.message(Form.waiting_for_edit_value)
-async def edit_value(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    field = data.get("edit_field")
-    try:
-        if field == "Дата":
-            current_reminder['date'] = datetime.strptime(message.text, "%Y-%m-%d").date()
-        elif field == "Время":
-            current_reminder['time'] = datetime.strptime(message.text, "%H:%M").time()
-        elif field == "Содержание":
-            current_reminder['text'] = message.text
-        await message.answer(f"{field} изменено!", reply_markup=main_kb)
-    except ValueError:
-        await message.answer("Неверный формат. Попробуй снова.")
-    await state.clear()
-
-# Удаление напоминания
-@dp.message(F.text == "❌ Удалить напоминание")
-async def delete_reminder(message: types.Message):
-    current_reminder.clear()
-    await message.answer("Напоминание удалено!", reply_markup=main_kb)
-
-# Запуск
+# Запуск бота
 async def main():
+    asyncio.create_task(reminder_loop())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
