@@ -6,6 +6,11 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from datetime import datetime
 import pytz
+import logging
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 TOKEN = "8306438881:AAEFg_MpnXk_iY2zHA5cGJomFv_kVAygbLk"
 ADMIN_CHAT_ID = 5612586446
@@ -74,15 +79,15 @@ async def forward_report(message: types.Message, state: FSMContext):
         return
         
     name = user_names[user_id]
-    username = f"@{message.from_user.username}" if message.from_user.username else "без username"
     
     try:
         if message.text:
-            report_text = f"📋 Отчет от {name} ({username})\n\n{message.text}"
+            report_text = f"📋 Отчет от {name}\n\n{message.text}"
             await bot.send_message(chat_id=ADMIN_CHAT_ID, text=report_text)
+            await message.answer("✅ Отчет успешно отправлен!", reply_markup=main_kb)
             
         elif message.photo:
-            caption = f"📷 Фото-отчет от {name} ({username})"
+            caption = f"📷 Фото-отчет от {name}"
             if message.caption:
                 caption += f"\n\n{message.caption}"
                 
@@ -91,9 +96,10 @@ async def forward_report(message: types.Message, state: FSMContext):
                 photo=message.photo[-1].file_id,
                 caption=caption
             )
+            await message.answer("✅ Фото-отчет успешно отправлен!", reply_markup=main_kb)
             
         elif message.document:
-            caption = f"📄 Документ-отчет от {name} ({username})"
+            caption = f"📄 Документ-отчет от {name}"
             if message.caption:
                 caption += f"\n\n{message.caption}"
                 
@@ -102,29 +108,29 @@ async def forward_report(message: types.Message, state: FSMContext):
                 document=message.document.file_id,
                 caption=caption
             )
+            await message.answer("✅ Документ-отчет успешно отправлен!", reply_markup=main_kb)
             
         else:
             await message.answer("Пожалуйста, отправьте текст, фото или документ")
             return
             
-        await message.answer("✅ Отчет успешно отправлен!", reply_markup=main_kb)
-        
     except Exception as e:
+        logger.error(f"Ошибка при отправке отчета: {e}")
         await message.answer("❌ Ошибка при отправке отчета. Попробуйте еще раз.")
-        print(f"Ошибка отправки отчета: {e}")
     
     await state.clear()
 
 # --- Напоминания ---
 @dp.message(F.text == "📌 Установить напоминание")
 async def set_reminder_date(message: types.Message, state: FSMContext):
-    await message.answer("Введи дату напоминания в формате ГГГГ-ММ-ДД (например, 2024-01-15):")
+    await message.answer("Введи дату напоминания в формате ГГГГ-ММ-ДД (например, 2025-08-20):")
     await state.set_state(Form.waiting_for_reminder_date)
 
 @dp.message(Form.waiting_for_reminder_date)
 async def set_reminder_time(message: types.Message, state: FSMContext):
     try:
-        date = datetime.strptime(message.text, "%Y-%m-%d").date()
+        date_str = message.text.strip()
+        date = datetime.strptime(date_str, "%Y-%m-%d").date()
         today = datetime.now(UZBEK_TZ).date()
         
         if date < today:
@@ -135,12 +141,14 @@ async def set_reminder_time(message: types.Message, state: FSMContext):
         await message.answer("Введи время напоминания в формате ЧЧ:ММ (например, 14:30):")
         await state.set_state(Form.waiting_for_reminder_time)
     except ValueError:
-        await message.answer("Неверный формат даты. Попробуй снова ГГГГ-ММ-ДД.")
+        await message.answer("Неверный формат даты. Попробуй снова ГГГГ-ММ-ДД (например, 2025-08-20).")
 
 @dp.message(Form.waiting_for_reminder_time)
 async def set_reminder_text(message: types.Message, state: FSMContext):
     try:
-        time = datetime.strptime(message.text, "%H:%M").time()
+        time_str = message.text.strip()
+        time = datetime.strptime(time_str, "%H:%M").time()
+        
         data = await state.get_data()
         date = data['reminder_date']
         
@@ -155,7 +163,7 @@ async def set_reminder_text(message: types.Message, state: FSMContext):
         await message.answer("Напиши текст напоминания:")
         await state.set_state(Form.waiting_for_reminder_text)
     except ValueError:
-        await message.answer("Неверный формат времени. Попробуй снова ЧЧ:ММ.")
+        await message.answer("Неверный формат времени. Попробуй снова ЧЧ:ММ (например, 14:30).")
 
 @dp.message(Form.waiting_for_reminder_text)
 async def save_reminder(message: types.Message, state: FSMContext):
