@@ -6,14 +6,20 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime
+import logging
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+
+# === ТОКЕН И ID ГРУППЫ ===
 TOKEN = "8306438881:AAEFg_MpnXk_iY2zHA5cGJomFv_kVAygbLk"
-ADMIN_CHAT_ID = 5612586446  # группа для отчетов и напоминаний
+ADMIN_CHAT_ID = -4936649070  # Твой ID группы
 
+# === БОТ И ДИСПЕТЧЕР ===
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- Главное меню ---
+# === КЛАВИАТУРЫ ===
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📤 Отправить отчет")],
@@ -23,21 +29,6 @@ main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# FSM
-class Form(StatesGroup):
-    waiting_for_name = State()
-    waiting_for_report = State()
-    reminder_date = State()
-    reminder_time = State()
-    reminder_text = State()
-    editing_choice = State()
-    editing_value = State()
-
-# --- Хранилища ---
-user_names = {}  # user_id -> name
-reminders = []   # список кортежей (datetime, text, user_id)
-
-# --- Inline кнопки для редактирования ---
 edit_kb = InlineKeyboardMarkup(
     inline_keyboard=[
         [
@@ -48,7 +39,21 @@ edit_kb = InlineKeyboardMarkup(
     ]
 )
 
-# --- Старт ---
+# === FSM ===
+class Form(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_report = State()
+    reminder_date = State()
+    reminder_time = State()
+    reminder_text = State()
+    editing_choice = State()
+    editing_value = State()
+
+# === ХРАНИЛИЩА ===
+user_names = {}  # user_id -> name
+reminders = []   # список (datetime, text, user_id)
+
+# === /start ===
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await message.answer("Привет! Введи своё имя для отчетов:", reply_markup=main_kb)
@@ -60,7 +65,7 @@ async def process_name(message: types.Message, state: FSMContext):
     await message.answer(f"Спасибо, {message.text}! Теперь можешь отправлять отчёты и устанавливать напоминания.", reply_markup=main_kb)
     await state.clear()
 
-# --- Отчёты ---
+# === ОТПРАВКА ОТЧЁТА ===
 @dp.message(F.text == "📤 Отправить отчет")
 async def send_report(message: types.Message, state: FSMContext):
     if message.from_user.id not in user_names:
@@ -69,19 +74,36 @@ async def send_report(message: types.Message, state: FSMContext):
     await message.answer("Отправь отчет (текст, фото или документ):")
     await state.set_state(Form.waiting_for_report)
 
-@dp.message(Form.waiting_for_report, F.content_type.in_({"text", "photo", "document"}))
+@dp.message(Form.waiting_for_report)
 async def forward_report(message: types.Message, state: FSMContext):
     name = user_names.get(message.from_user.id, "Пользователь")
-    if message.content_type == "text":
-        await bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"📋 Отчет от {name}:\n\n{message.text}")
-    elif message.content_type == "photo":
-        await bot.send_photo(chat_id=ADMIN_CHAT_ID, photo=message.photo[-1].file_id, caption=f"📷 Фото-отчет от {name}\n{message.caption or ''}")
-    elif message.content_type == "document":
-        await bot.send_document(chat_id=ADMIN_CHAT_ID, document=message.document.file_id, caption=f"📄 Документ-отчет от {name}\n{message.caption or ''}")
-    await message.answer("Отчет отправлен!", reply_markup=main_kb)
+    try:
+        if message.content_type == "text":
+            await bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=f"📋 Отчет от {name}:\n\n{message.text}"
+            )
+        elif message.content_type == "photo":
+            caption = f"📷 Фото-отчет от {name}\n{message.caption or ''}"
+            await bot.send_photo(
+                chat_id=ADMIN_CHAT_ID,
+                photo=message.photo[-1].file_id,
+                caption=caption
+            )
+        elif message.content_type == "document":
+            caption = f"📄 Документ-отчет от {name}\n{message.caption or ''}"
+            await bot.send_document(
+                chat_id=ADMIN_CHAT_ID,
+                document=message.document.file_id,
+                caption=caption
+            )
+        await message.answer("✅ Отчет отправлен!", reply_markup=main_kb)
+    except Exception as e:
+        await message.answer("❌ Не удалось отправить отчет. Попробуй снова позже.")
+        logging.error(f"Ошибка отправки отчета: {e}")
     await state.clear()
 
-# --- Напоминания ---
+# === УСТАНОВКА НАПОМИНАНИЯ ===
 @dp.message(F.text == "📌 Установить напоминание")
 async def set_reminder(message: types.Message, state: FSMContext):
     await message.answer("Введи дату в формате YYYY-MM-DD:")
@@ -95,7 +117,7 @@ async def process_date(message: types.Message, state: FSMContext):
         await message.answer("Теперь введи время в формате HH:MM:")
         await state.set_state(Form.reminder_time)
     except ValueError:
-        await message.answer("Неверный формат даты. Попробуй снова: YYYY-MM-DD")
+        await message.answer("❌ Неверный формат даты. Попробуй снова: YYYY-MM-DD")
 
 @dp.message(Form.reminder_time, F.text)
 async def process_time(message: types.Message, state: FSMContext):
@@ -105,30 +127,40 @@ async def process_time(message: types.Message, state: FSMContext):
         await message.answer("Теперь введи текст напоминания:")
         await state.set_state(Form.reminder_text)
     except ValueError:
-        await message.answer("Неверный формат времени. Попробуй снова: HH:MM")
+        await message.answer("❌ Неверный формат времени. Попробуй снова: HH:MM")
 
 @dp.message(Form.reminder_text, F.text)
 async def process_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     dt_str = f"{data['reminder_date']} {data['reminder_time']}"
-    reminder_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-    text = message.text
-    reminders.append((reminder_dt, text, message.from_user.id))
-    await message.answer(f"Напоминание установлено на {dt_str}: {text}", reply_markup=main_kb)
+    try:
+        reminder_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+        reminders.append((reminder_dt, message.text, message.from_user.id))
+        await message.answer(
+            f"✅ Напоминание установлено на {reminder_dt.strftime('%Y-%m-%d %H:%M')}: {message.text}",
+            reply_markup=main_kb
+        )
+    except Exception as e:
+        await message.answer("❌ Ошибка при установке напоминания.")
+        logging.error(f"Ошибка парсинга времени: {e}")
     await state.clear()
 
-# --- Редактирование напоминания ---
+# === РЕДАКТИРОВАНИЕ НАПОМИНАНИЯ ===
 @dp.message(F.text == "✏ Редактировать напоминание")
 async def edit_reminder(message: types.Message, state: FSMContext):
     user_rems = [r for r in reminders if r[2] == message.from_user.id]
     if not user_rems:
-        await message.answer("У тебя нет сохраненных напоминаний.")
+        await message.answer("У тебя нет сохранённых напоминаний.")
         return
-    await message.answer("Выбери, что редактировать:", reply_markup=edit_kb)
+    # Возьмём последнее напоминание (можно улучшить — показывать список)
+    reminder = user_rems[-1]
+    index = reminders.index(reminder)
+    await state.update_data(editing_reminder_index=index)
+    await message.answer("Что хочешь изменить?", reply_markup=edit_kb)
 
 @dp.callback_query(F.data.startswith("edit_"))
 async def process_edit_choice(callback: types.CallbackQuery, state: FSMContext):
-    choice = callback.data.split("_")[1]
+    choice = callback.data.split("_", 1)[1]  # date, time, text
     await state.update_data(edit_choice=choice)
     if choice == "date":
         await callback.message.answer("Введи новую дату (YYYY-MM-DD):")
@@ -142,44 +174,76 @@ async def process_edit_choice(callback: types.CallbackQuery, state: FSMContext):
 async def save_edited_reminder(message: types.Message, state: FSMContext):
     data = await state.get_data()
     choice = data.get("edit_choice")
-    user_rems = [r for r in reminders if r[2] == message.from_user.id]
-    if not user_rems:
-        await message.answer("Нет напоминаний для редактирования.")
+    index = data.get("editing_reminder_index")
+
+    if index is None or index >= len(reminders):
+        await message.answer("❌ Напоминание не найдено.")
         await state.clear()
         return
-    reminder = user_rems[-1]  # редактируем последнее
+
+    reminder = reminders[index]
+    if reminder[2] != message.from_user.id:
+        await message.answer("❌ Ты не можешь редактировать это напоминание.")
+        await state.clear()
+        return
 
     try:
+        dt, text, user_id = reminder
         if choice == "date":
             new_date = datetime.strptime(message.text, "%Y-%m-%d").date()
-            reminder_dt = reminder[0]
-            reminder = (datetime.combine(new_date, reminder_dt.time()), reminder[1], reminder[2])
+            new_dt = datetime.combine(new_date, dt.time())
+            reminders[index] = (new_dt, text, user_id)
+            display = new_dt
         elif choice == "time":
             new_time = datetime.strptime(message.text, "%H:%M").time()
-            reminder_dt = reminder[0]
-            reminder = (datetime.combine(reminder_dt.date(), new_time), reminder[1], reminder[2])
+            new_dt = datetime.combine(dt.date(), new_time)
+            reminders[index] = (new_dt, text, user_id)
+            display = new_dt
         elif choice == "text":
-            reminder = (reminder[0], message.text, reminder[2])
-        reminders[-1] = reminder
-        await message.answer(f"✅ Напоминание обновлено: {reminder[0].strftime('%Y-%m-%d %H:%M')} — {reminder[1]}")
-    except Exception:
-        await message.answer("Неверный формат. Попробуй ещё раз.")
+            reminders[index] = (dt, message.text, user_id)
+            display = dt
+        else:
+            await message.answer("❌ Неизвестное действие.")
+            await state.clear()
+            return
+
+        await message.answer(
+            f"✅ Напоминание обновлено: {display.strftime('%Y-%m-%d %H:%M')} — {reminders[index][1]}",
+            reply_markup=main_kb
+        )
+    except ValueError:
+        await message.answer("❌ Неверный формат. Попробуй ещё раз.")
+    except Exception as e:
+        await message.answer("❌ Ошибка при редактировании.")
+        logging.error(f"Ошибка редактирования: {e}")
     await state.clear()
 
-# --- Фоновая проверка напоминаний ---
+# === ФОНОВЫЙ ЦИКЛ НАПОМИНАНИЙ ===
 async def reminder_loop():
     while True:
-        now = datetime.now()
-        for r in reminders.copy():
-            dt, text, user_id = r
-            if now >= dt:
-                await bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"Напоминание от {user_names.get(user_id,'Пользователь')}: {text}")
-                reminders.remove(r)
+        try:
+            now = datetime.now()
+            for reminder in reminders.copy():
+                dt, text, user_id = reminder
+                if now >= dt:
+                    try:
+                        name = user_names.get(user_id, "Пользователь")
+                        await bot.send_message(
+                            chat_id=ADMIN_CHAT_ID,
+                            text=f"⏰ Напоминание от {name}: {text}"
+                        )
+                        reminders.remove(reminder)
+                    except Exception as e:
+                        logging.error(f"❌ Ошибка отправки напоминания: {e}")
+        except Exception as e:
+            logging.error(f"❌ Ошибка в цикле напоминаний: {e}")
         await asyncio.sleep(30)
 
-# --- Запуск ---
+# === ЗАПУСК ===
 async def main():
+    # Запускаем фоновую задачу
     asyncio.create_task(reminder_loop())
+    logging.info("Бот запущен. Ожидание сообщений...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
