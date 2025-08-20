@@ -1,34 +1,31 @@
 import logging
-from aiogram import Bot, Dispatcher, executor, types
+import asyncio
+from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
 
-# ==========================
 API_TOKEN = "8306438881:AAEFg_MpnXk_iY2zHA5cGJomFv_kVAygbLk"
-TARGET_CHAT_ID = 5612586446  # чат, куда пересылаем отчёты и напоминания
-# ==========================
+TARGET_CHAT_ID = 5612586446
 
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()
 
 scheduler = AsyncIOScheduler(timezone=pytz.timezone("Asia/Tashkent"))
 
-# Хранение данных
-users = {}      # {user_id: {"name": str}}
-reminders = {}  # {user_id: {"day": int, "time": str, "text": str, "job_id": str}}
-user_state = {} # хранит состояние пользователя для установки/редактирования
-
+users = {}
+reminders = {}
+user_state = {}
 
 # --- КНОПКИ ---
 def main_menu():
     kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Отправить отчёт", callback_data="send_report"))
     kb.add(InlineKeyboardButton("📌 Установить напоминание", callback_data="set_reminder"))
     kb.add(InlineKeyboardButton("✏ Редактировать напоминание", callback_data="edit_reminder"))
     kb.add(InlineKeyboardButton("❌ Удалить напоминание", callback_data="delete_reminder"))
-    kb.add(InlineKeyboardButton("Отправить отчёт", callback_data="send_report"))
     return kb
 
 def days_menu():
@@ -44,13 +41,11 @@ def times_menu():
         kb.insert(InlineKeyboardButton(f"{h}:00", callback_data=f"time_{h}:00"))
     return kb
 
-
 # --- СТАРТ ---
 @dp.message_handler(commands=["start"])
 async def start_cmd(message: types.Message):
     user_state[message.from_user.id] = "waiting_name"
     await message.answer("👋 Привет! Напиши своё имя:")
-
 
 # --- СОХРАНЕНИЕ ИМЕНИ ---
 @dp.message_handler(lambda msg: user_state.get(msg.from_user.id) == "waiting_name")
@@ -58,10 +53,9 @@ async def set_name(message: types.Message):
     users[message.from_user.id] = {"name": message.text}
     user_state[message.from_user.id] = None
     await message.answer(
-        f"✅ Имя сохранено: {message.text}\n\nТеперь можешь отправлять отчёты или настраивать напоминания.",
+        f"✅ Имя сохранено: {message.text}\nТеперь можешь отправлять отчёты или настраивать напоминания.",
         reply_markup=main_menu()
     )
-
 
 # --- ПЕРЕСЫЛКА ОТЧЁТОВ ---
 @dp.message_handler(content_types=types.ContentTypes.ANY)
@@ -81,7 +75,6 @@ async def forward_report(message: types.Message):
         await bot.send_document(TARGET_CHAT_ID, message.document.file_id, caption=caption + (message.caption or ""))
     else:
         await message.forward(TARGET_CHAT_ID)
-
 
 # --- УСТАНОВКА НАПОМИНАНИЯ ---
 @dp.callback_query_handler(lambda c: c.data == "set_reminder")
@@ -121,14 +114,12 @@ async def set_text(message: types.Message):
     state = user_state[uid]
     user_state[uid] = None
 
-    # Удаляем старую задачу, если была
     if "job_id" in reminders[uid]:
         try:
             scheduler.remove_job(reminders[uid]["job_id"])
         except:
             pass
 
-    # Создаём новую задачу
     hour = int(reminders[uid]["time"].split(":")[0])
     job = scheduler.add_job(send_reminder, "cron",
                             day_of_week=reminders[uid]["day"]-1,
@@ -142,7 +133,6 @@ async def set_text(message: types.Message):
         f"📅 День: {reminders[uid]['day']}\n⏰ Время: {reminders[uid]['time']}\n💬 Текст: {reminders[uid]['text']}",
         reply_markup=main_menu()
     )
-
 
 # --- РЕДАКТИРОВАНИЕ НАПОМИНАНИЯ ---
 @dp.callback_query_handler(lambda c: c.data == "edit_reminder")
@@ -170,15 +160,17 @@ async def delete_reminder(call: types.CallbackQuery):
         await call.message.answer("❗ У тебя нет активных напоминаний.", reply_markup=main_menu())
     await call.answer()
 
-
 # --- ОТПРАВКА НАПОМИНАНИЯ В ГРУППУ ---
 async def send_reminder(uid):
     if uid in reminders:
         text = reminders[uid]["text"]
         await bot.send_message(TARGET_CHAT_ID, f"🔔 Напоминание!\n\n{text}")
 
-
 # --- ЗАПУСК ---
-if __name__ == "__main__":
+async def main():
     scheduler.start()
-    executor.start_polling(dp, skip_updates=True)
+    dp.startup.register(lambda _: logging.info("Бот запущен"))
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
