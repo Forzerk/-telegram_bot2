@@ -138,12 +138,10 @@ async def process_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     dt_str = f"{data['reminder_date']} {data['reminder_time']}"
     try:
-        # Парсим как naive datetime, потом помечаем как Tashkent
         naive_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-        reminder_dt = uzbekistan_tz.localize(naive_dt)  # Указываем, что это время по Узбекистану
+        reminder_dt = uzbekistan_tz.localize(naive_dt)
         reminders.append((reminder_dt, message.text, message.from_user.id))
         
-        # Лог для проверки
         print(f"✅ Напоминание установлено на: {reminder_dt.strftime('%Y-%m-%d %H:%M %Z')}")
 
         await message.answer(
@@ -162,7 +160,7 @@ async def edit_reminder(message: types.Message, state: FSMContext):
     if not user_rems:
         await message.answer("У тебя нет сохранённых напоминаний.")
         return
-    reminder = user_rems[-1]  # Берём последнее
+    reminder = user_rems[-1]
     index = reminders.index(reminder)
     await state.update_data(editing_reminder_index=index)
     await message.answer("Что хочешь изменить?", reply_markup=edit_kb)
@@ -225,22 +223,22 @@ async def save_edited_reminder(message: types.Message, state: FSMContext):
         logging.error(f"Ошибка редактирования: {e}")
     await state.clear()
 
-# === ФОНОВЫЙ ЦИКЛ НАПОМИНАНИЙ (с учётом часового пояса) ===
+# === ФОНОВЫЙ ЦИКЛ НАПОМИНАНИЙ (БЕЗ ИМЕНИ) ===
 async def reminder_loop():
     print("✅ Цикл напоминаний запущен (время: Asia/Tashkent)")
     while True:
         try:
-            now = datetime.now(uzbekistan_tz)  # Текущее время в Узбекистане
+            now = datetime.now(uzbekistan_tz)
             print(f"⏰ Проверка напоминаний... Текущее время (Ташкент): {now.strftime('%Y-%m-%d %H:%M:%S')}")
             for reminder in reminders.copy():
                 dt, text, user_id = reminder
                 if now >= dt:
                     print(f"🎯 Сработало напоминание: {text}")
                     try:
-                        name = user_names.get(user_id, "Пользователь")
+                        # Отправляем ТОЛЬКО текст, без имени
                         await bot.send_message(
                             chat_id=ADMIN_CHAT_ID,
-                            text=f"⏰ Напоминание от {name}: {text}"
+                            text=f"⏰ {text}"
                         )
                         reminders.remove(reminder)
                         print(f"✅ Отправлено и удалено")
@@ -248,11 +246,10 @@ async def reminder_loop():
                         print(f"❌ Ошибка отправки: {e}")
         except Exception as e:
             print(f"❌ Ошибка в цикле напоминаний: {e}")
-        await asyncio.sleep(10)  # Проверка каждые 10 сек
+        await asyncio.sleep(10)
 
 # === ЗАПУСК ===
 async def main():
-    # Запускаем фоновую задачу
     asyncio.create_task(reminder_loop())
     logging.info("Бот запущен. Ожидание сообщений...")
     await dp.start_polling(bot)
