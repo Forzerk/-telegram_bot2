@@ -8,7 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime, timedelta
 
 TOKEN = "8306438881:AAEFg_MpnXk_iY2zHA5cGJomFv_kVAygbLk"
-ADMIN_CHAT_ID = 5612586446  # Группа для отчетов и напоминаний
+ADMIN_CHAT_ID = -4936649070  # ВРЕМЕННО: тестовая группа для отчетов и напоминаний
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
