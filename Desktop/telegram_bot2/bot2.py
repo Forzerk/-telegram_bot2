@@ -7,6 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime
 import logging
+import pytz  # Для работы с часовым поясом
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -14,6 +15,9 @@ logging.basicConfig(level=logging.INFO)
 # === ТОКЕН И ID ГРУППЫ ===
 TOKEN = "8306438881:AAEFg_MpnXk_iY2zHA5cGJomFv_kVAygbLk"
 ADMIN_CHAT_ID = -4936649070  # Твой ID группы
+
+# === Часовой пояс Узбекистана ===
+uzbekistan_tz = pytz.timezone("Asia/Tashkent")
 
 # === БОТ И ДИСПЕТЧЕР ===
 bot = Bot(token=TOKEN)
@@ -99,7 +103,7 @@ async def forward_report(message: types.Message, state: FSMContext):
             )
         await message.answer("✅ Отчет отправлен!", reply_markup=main_kb)
     except Exception as e:
-        await message.answer("❌ Не удалось отправить отчет. Попробуй снова позже.")
+        await message.answer("❌ Не удалось отправить отчет. Попробуй снова.")
         logging.error(f"Ошибка отправки отчета: {e}")
     await state.clear()
 
@@ -117,7 +121,7 @@ async def process_date(message: types.Message, state: FSMContext):
         await message.answer("Теперь введи время в формате HH:MM:")
         await state.set_state(Form.reminder_time)
     except ValueError:
-        await message.answer("❌ Неверный формат даты. Попробуй снова: YYYY-MM-DD")
+        await message.answer("❌ Неверный формат даты. Пример: 2025-04-06")
 
 @dp.message(Form.reminder_time, F.text)
 async def process_time(message: types.Message, state: FSMContext):
@@ -127,17 +131,23 @@ async def process_time(message: types.Message, state: FSMContext):
         await message.answer("Теперь введи текст напоминания:")
         await state.set_state(Form.reminder_text)
     except ValueError:
-        await message.answer("❌ Неверный формат времени. Попробуй снова: HH:MM")
+        await message.answer("❌ Неверный формат времени. Пример: 14:30")
 
 @dp.message(Form.reminder_text, F.text)
 async def process_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     dt_str = f"{data['reminder_date']} {data['reminder_time']}"
     try:
-        reminder_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+        # Парсим как naive datetime, потом помечаем как Tashkent
+        naive_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+        reminder_dt = uzbekistan_tz.localize(naive_dt)  # Указываем, что это время по Узбекистану
         reminders.append((reminder_dt, message.text, message.from_user.id))
+        
+        # Лог для проверки
+        print(f"✅ Напоминание установлено на: {reminder_dt.strftime('%Y-%m-%d %H:%M %Z')}")
+
         await message.answer(
-            f"✅ Напоминание установлено на {reminder_dt.strftime('%Y-%m-%d %H:%M')}: {message.text}",
+            f"✅ Напоминание установлено на {reminder_dt.strftime('%d.%m.%Y в %H:%M')}:\n{message.text}",
             reply_markup=main_kb
         )
     except Exception as e:
@@ -152,15 +162,14 @@ async def edit_reminder(message: types.Message, state: FSMContext):
     if not user_rems:
         await message.answer("У тебя нет сохранённых напоминаний.")
         return
-    # Возьмём последнее напоминание (можно улучшить — показывать список)
-    reminder = user_rems[-1]
+    reminder = user_rems[-1]  # Берём последнее
     index = reminders.index(reminder)
     await state.update_data(editing_reminder_index=index)
     await message.answer("Что хочешь изменить?", reply_markup=edit_kb)
 
 @dp.callback_query(F.data.startswith("edit_"))
 async def process_edit_choice(callback: types.CallbackQuery, state: FSMContext):
-    choice = callback.data.split("_", 1)[1]  # date, time, text
+    choice = callback.data.split("_", 1)[1]
     await state.update_data(edit_choice=choice)
     if choice == "date":
         await callback.message.answer("Введи новую дату (YYYY-MM-DD):")
@@ -183,7 +192,7 @@ async def save_edited_reminder(message: types.Message, state: FSMContext):
 
     reminder = reminders[index]
     if reminder[2] != message.from_user.id:
-        await message.answer("❌ Ты не можешь редактировать это напоминание.")
+        await message.answer("❌ Это не твоё напоминание.")
         await state.clear()
         return
 
@@ -191,41 +200,42 @@ async def save_edited_reminder(message: types.Message, state: FSMContext):
         dt, text, user_id = reminder
         if choice == "date":
             new_date = datetime.strptime(message.text, "%Y-%m-%d").date()
-            new_dt = datetime.combine(new_date, dt.time())
+            new_dt = uzbekistan_tz.localize(datetime.combine(new_date, dt.time()))
             reminders[index] = (new_dt, text, user_id)
-            display = new_dt
         elif choice == "time":
             new_time = datetime.strptime(message.text, "%H:%M").time()
-            new_dt = datetime.combine(dt.date(), new_time)
+            new_dt = uzbekistan_tz.localize(datetime.combine(dt.date(), new_time))
             reminders[index] = (new_dt, text, user_id)
-            display = new_dt
         elif choice == "text":
             reminders[index] = (dt, message.text, user_id)
-            display = dt
         else:
             await message.answer("❌ Неизвестное действие.")
             await state.clear()
             return
 
+        new_dt = reminders[index][0]
         await message.answer(
-            f"✅ Напоминание обновлено: {display.strftime('%Y-%m-%d %H:%M')} — {reminders[index][1]}",
+            f"✅ Обновлено: {new_dt.strftime('%d.%m.%Y в %H:%M')} — {reminders[index][1]}",
             reply_markup=main_kb
         )
     except ValueError:
-        await message.answer("❌ Неверный формат. Попробуй ещё раз.")
+        await message.answer("❌ Неверный формат даты или времени.")
     except Exception as e:
         await message.answer("❌ Ошибка при редактировании.")
         logging.error(f"Ошибка редактирования: {e}")
     await state.clear()
 
-# === ФОНОВЫЙ ЦИКЛ НАПОМИНАНИЙ ===
+# === ФОНОВЫЙ ЦИКЛ НАПОМИНАНИЙ (с учётом часового пояса) ===
 async def reminder_loop():
+    print("✅ Цикл напоминаний запущен (время: Asia/Tashkent)")
     while True:
         try:
-            now = datetime.now()
+            now = datetime.now(uzbekistan_tz)  # Текущее время в Узбекистане
+            print(f"⏰ Проверка напоминаний... Текущее время (Ташкент): {now.strftime('%Y-%m-%d %H:%M:%S')}")
             for reminder in reminders.copy():
                 dt, text, user_id = reminder
                 if now >= dt:
+                    print(f"🎯 Сработало напоминание: {text}")
                     try:
                         name = user_names.get(user_id, "Пользователь")
                         await bot.send_message(
@@ -233,11 +243,12 @@ async def reminder_loop():
                             text=f"⏰ Напоминание от {name}: {text}"
                         )
                         reminders.remove(reminder)
+                        print(f"✅ Отправлено и удалено")
                     except Exception as e:
-                        logging.error(f"❌ Ошибка отправки напоминания: {e}")
+                        print(f"❌ Ошибка отправки: {e}")
         except Exception as e:
-            logging.error(f"❌ Ошибка в цикле напоминаний: {e}")
-        await asyncio.sleep(30)
+            print(f"❌ Ошибка в цикле напоминаний: {e}")
+        await asyncio.sleep(10)  # Проверка каждые 10 сек
 
 # === ЗАПУСК ===
 async def main():
